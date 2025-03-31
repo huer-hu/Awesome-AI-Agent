@@ -3,7 +3,7 @@ name: Link Checker and Fixer
 on:
   workflow_dispatch:
   schedule:
-    # 每周一凌晨3点运行
+    # Run at 3 AM every Monday
     - cron: '0 3 * * 1'
   
 
@@ -12,26 +12,28 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: 检出代码
+      - name: Checkout Code
         uses: actions/checkout@v3
         with:
-          # 需要完整的git历史用于创建PR
+          # Need full git history for PR creation
           fetch-depth: 0
+          # Use PAT with write permissions instead of default token
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
       
-      - name: 设置Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
       
-      - name: 安装依赖
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 linkchecker
 
-      - name: 检查并整理链接
+      - name: Check and Fix Links
         id: fix-links
         run: |
-          # 创建一个Python脚本来检查和修复链接
+          # Create a Python script to check and fix links
           cat > fix_links.py << 'EOL'
           import re
           import requests
@@ -41,30 +43,30 @@ jobs:
           import os
           
           def check_url(url, timeout=10):
-              """检查URL是否可访问"""
+              """Check if URL is accessible"""
               try:
                   headers = {
                       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                   }
                   response = requests.head(url, timeout=timeout, headers=headers, allow_redirects=True)
                   if response.status_code >= 400:
-                      # 尝试GET请求，有些服务器不接受HEAD
+                      # Try GET request, some servers don't accept HEAD
                       response = requests.get(url, timeout=timeout, headers=headers, allow_redirects=True)
                   return response.status_code < 400
               except Exception as e:
-                  print(f"检查URL时出错: {url}, 错误: {str(e)}")
+                  print(f"Error checking URL: {url}, Error: {str(e)}")
                   return False
           
           def check_github_repo(url):
-              """检查GitHub仓库是否存在，并尝试查找替代URL"""
-              # 提取GitHub仓库路径
+              """Check if GitHub repo exists and try to find alternative URL"""
+              # Extract GitHub repo path
               match = re.search(r'github\.com/([^/]+/[^/]+)', url)
               if not match:
                   return None
                   
               repo_path = match.group(1)
               
-              # 检查是否有重定向
+              # Check for redirects
               try:
                   response = requests.get(f'https://github.com/{repo_path}', 
                                          allow_redirects=False,
@@ -74,12 +76,12 @@ jobs:
               except:
                   pass
                   
-              # 检查用户的其他仓库
+              # Check user's other repositories
               try:
                   username = repo_path.split('/')[0]
                   response = requests.get(f'https://github.com/{username}')
                   if response.status_code == 200:
-                      # 用户存在，但仓库可能已重命名或删除
+                      # User exists, but repo may have been renamed or deleted
                       return f"https://github.com/{username}"
               except:
                   pass
@@ -87,11 +89,11 @@ jobs:
               return None
           
           def process_markdown_file(file_path):
-              """处理Markdown文件中的链接"""
+              """Process links in Markdown file"""
               with open(file_path, 'r', encoding='utf-8') as f:
                   content = f.read()
               
-              # 使用正则表达式提取所有链接
+              # Use regex to extract all links
               url_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
               broken_links = []
               fixed_links = {}
@@ -101,119 +103,119 @@ jobs:
                   text, url = match.groups()
                   original_url = url
                   
-                  # 跳过非http链接
+                  # Skip non-http links
                   if not (url.startswith('http://') or url.startswith('https://')):
                       continue
                   
-                  # 清除URL中的查询参数
+                  # Clean URL of query parameters
                   clean_url = url.split('?')[0].split('#')[0]
                   
-                  print(f"检查链接: {clean_url}")
+                  print(f"Checking link: {clean_url}")
                   
-                  # 检查链接是否有效
+                  # Check if link is valid
                   if not check_url(clean_url):
-                      print(f"发现失效链接: {clean_url}")
+                      print(f"Found broken link: {clean_url}")
                       broken_links.append({
                           'text': text,
                           'url': url,
                           'position': match.start()
                       })
                       
-                      # 尝试网页存档
+                      # Try web archive
                       archive_url = f"https://web.archive.org/web/{url}"
                       if check_url(archive_url):
                           fixed_links[url] = archive_url
-                          replacements.append((match.group(0), f"[{text}]({archive_url}) [存档链接]"))
-                          print(f"找到存档链接: {archive_url}")
+                          replacements.append((match.group(0), f"[{text}]({archive_url}) [Archived Link]"))
+                          print(f"Found archive link: {archive_url}")
                       
-                      # 如果是GitHub仓库，尝试查找替代URL
+                      # If GitHub repo, try to find alternative URL
                       elif 'github.com' in url:
                           alternative = check_github_repo(url)
                           if alternative and alternative != url:
                               fixed_links[url] = alternative
-                              replacements.append((match.group(0), f"[{text}]({alternative}) [可能已迁移]"))
-                              print(f"找到替代GitHub链接: {alternative}")
+                              replacements.append((match.group(0), f"[{text}]({alternative}) [Possibly Migrated]"))
+                              print(f"Found alternative GitHub link: {alternative}")
                   
-                  # 休眠一小段时间，避免请求过快
+                  # Sleep briefly to avoid too many requests
                   time.sleep(0.5)
               
-              # 应用替换
+              # Apply replacements
               new_content = content
               for old, new in replacements:
                   new_content = new_content.replace(old, new)
               
-              # 如果有变更，写回文件
+              # If changes were made, write back to file
               if new_content != content:
                   with open(file_path, 'w', encoding='utf-8') as f:
                       f.write(new_content)
-                  print(f"已更新文件 {file_path} 中的失效链接")
+                  print(f"Updated broken links in file {file_path}")
               
-              # 写入报告
+              # Write report
               with open('link_report.json', 'w', encoding='utf-8') as f:
                   json.dump({
                       'broken_links': broken_links,
                       'fixed_links': fixed_links
                   }, f, ensure_ascii=False, indent=2)
               
-              # 生成Markdown格式的报告
+              # Generate Markdown format report
               with open('link_report.md', 'w', encoding='utf-8') as f:
-                  f.write("# 链接检查报告\n\n")
+                  f.write("# Link Check Report\n\n")
                   
                   if broken_links:
-                      f.write("## 失效链接\n\n")
+                      f.write("## Broken Links\n\n")
                       for link in broken_links:
                           f.write(f"- [{link['text']}]({link['url']})\n")
                       
                       if fixed_links:
-                          f.write("\n## 已修复链接\n\n")
+                          f.write("\n## Fixed Links\n\n")
                           for original, fixed in fixed_links.items():
-                              f.write(f"- 原链接: {original}\n")
-                              f.write(f"  修复为: {fixed}\n\n")
+                              f.write(f"- Original: {original}\n")
+                              f.write(f"  Fixed to: {fixed}\n\n")
                   else:
-                      f.write("恭喜！未发现失效链接。\n")
+                      f.write("Congratulations! No broken links found.\n")
               
               return len(broken_links) > 0, len(fixed_links) > 0
           
-          # 处理README文件
+          # Process README file
           has_broken_links, has_fixes = process_markdown_file('README.md')
           
-          # 设置输出变量
+          # Set output variables
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write(f"HAS_BROKEN_LINKS={'true' if has_broken_links else 'false'}\n")
               f.write(f"HAS_FIXES={'true' if has_fixes else 'false'}\n")
           EOL
           
-          # 运行Python脚本
+          # Run Python script
           python fix_links.py
       
-      - name: 创建Pull Request
+      - name: Create Pull Request
         if: env.HAS_FIXES == 'true'
         run: |
-          # 配置Git
+          # Configure Git
           git config --global user.name "LinkFixerBot"
           git config --global user.email "bot@example.com"
           
-          # 创建新分支
+          # Create new branch
           git checkout -b fix-broken-links-$(date +%Y%m%d)
           
-          # 添加并提交更改
+          # Add and commit changes
           git add README.md
-          git commit -m "自动修复失效链接" || echo "没有变更需要提交"
+          git commit -m "Automatically fix broken links" || echo "No changes to commit"
           
-          # 推送更改
+          # Push changes
           git push origin fix-broken-links-$(date +%Y%m%d)
           
-          # 创建PR
-          gh pr create --title "修复失效链接" \
-                      --body "此PR由链接检查器机器人自动创建，用于修复README中的失效链接。详情请见附加的报告。" \
-                      --label "链接维护" || echo "创建PR失败"
+          # Create PR
+          gh pr create --title "Fix Broken Links" \
+                      --body "This PR was automatically created by the link checker bot to fix broken links in the README. See the attached report for details." \
+                      --label "link-maintenance" || echo "Failed to create PR"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
       
-      - name: 创建问题(Issue)报告失效链接
+      - name: Create Issue to Report Broken Links
         if: env.HAS_BROKEN_LINKS == 'true' && env.HAS_FIXES == 'false'
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: "发现失效链接"
+          title: "Broken Links Detected"
           content-filepath: ./link_report.md
-          labels: "链接维护, 需要手动修复" 
+          labels: "link-maintenance, manual-fix-needed" 
