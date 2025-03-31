@@ -1,11 +1,11 @@
-name: 链接检查与自动修复
+name: Link Checker and Fixer
 
 on:
+  workflow_dispatch:
   schedule:
     # 每周一凌晨3点运行
     - cron: '0 3 * * 1'
-  # 允许手动触发工作流
-  workflow_dispatch:
+  
 
 jobs:
   check-and-fix-links:
